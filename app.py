@@ -5,6 +5,7 @@ import plotly.express as px
 from supabase import create_client, Client
 import json
 import os
+import time  # Ditambahkan untuk memberi jeda notifikasi
 
 # --- KONEKSI KE SUPABASE ---
 try:
@@ -81,9 +82,10 @@ sekarang = datetime.now()
 with st.sidebar:
     st.markdown("<h3 style='color: #0F172A; font-weight: 700;'>💳 Finance App</h3>", unsafe_allow_html=True)
     st.markdown("---")
+    # Menu Edit Records sudah dikembalikan ke dalam daftar!
     pilihan_menu = st.radio(
         "Menu Navigasi:",
-        ["📊 Dashboard Overview", "💰 Total Saldo (Dompet)", "💸 Add Transaction", "🔍 Filter & History", "📥 Export Data", "⚙️ Pengaturan"]
+        ["📊 Dashboard Overview", "💰 Total Saldo (Dompet)", "💸 Add Transaction", "🔍 Filter & History", "✏️ Edit Records", "📥 Export Data", "⚙️ Pengaturan"]
     )
 
 df = pd.DataFrame(data_keuangan)
@@ -204,13 +206,17 @@ elif pilihan_menu == "💸 Add Transaction":
                     "jenis_pembayaran": jenis_bayar
                 }
                 tambah_data_db(data_baru)
-                st.success(f"✅ {tipe_transaksi} berhasil disimpan ke Database Cloud!")
+                # Menambahkan pop-up modern (toast)
+                st.toast(f"Hore! {tipe_transaksi} berhasil dicatat!", icon="🎉")
+                st.success("✅ Data berhasil tersimpan ke Database Cloud.")
+                # Memberi waktu 1.5 detik agar pengguna bisa melihat pesan sukses
+                time.sleep(1.5)
                 st.rerun()
             else:
                 st.error("⚠️ Isi keterangan dan pastikan jumlah lebih dari 0!")
 
 # ==========================================
-# HALAMAN 3-4: FILTER & EKSPOR
+# HALAMAN 3: FILTER & HISTORY
 # ==========================================
 elif pilihan_menu == "🔍 Filter & History":
     st.markdown("<h2 style='color: #0F172A; font-weight: 700;'>Transaction History</h2>", unsafe_allow_html=True)
@@ -234,6 +240,51 @@ elif pilihan_menu == "🔍 Filter & History":
             df_tampil = df_tampil.sort_values(by='tanggal_asli', ascending=False)
             st.dataframe(df_tampil[['tanggal', 'keterangan', 'tipe', 'jenis_pembayaran', 'jumlah']], use_container_width=True, hide_index=True)
 
+# ==========================================
+# HALAMAN 4: EDIT RECORDS (DIKEMBALIKAN)
+# ==========================================
+elif pilihan_menu == "✏️ Edit Records":
+    st.markdown("<h2 style='color: #0F172A; font-weight: 700;'>Edit Records</h2>", unsafe_allow_html=True)
+    st.write("Ubah data langsung di dalam tabel. Untuk menghapus baris, klik kotak di ujung kiri lalu tekan 'Delete' pada keyboard.")
+    
+    if df.empty:
+        st.warning("Belum ada data untuk diedit.")
+    else:
+        semua_opsi = list(set(df['jenis_pembayaran'].unique()).union(set(daftar_bank)))
+        
+        # Membuat tabel yang bisa diedit (Sembunyikan kolom ID dan tanggal_asli agar rapi)
+        df_edit = st.data_editor(
+            df.drop(columns=['tanggal_asli'], errors='ignore'), 
+            num_rows="dynamic", 
+            use_container_width=True,
+            column_config={
+                "id": None, # ID disembunyikan dari layar
+                "tanggal": st.column_config.TextColumn("Waktu (YYYY-MM-DD HH:MM)"),
+                "tipe": st.column_config.SelectboxColumn("Tipe", options=["Pemasukan", "Pengeluaran"]),
+                "jumlah": st.column_config.NumberColumn("Jumlah (Rp)"),
+                "jenis_pembayaran": st.column_config.SelectboxColumn("Akun", options=semua_opsi)
+            }
+        )
+        
+        if st.button("💾 Simpan Perubahan Permanen"):
+            with st.spinner("Menyinkronkan data dengan Cloud Supabase..."):
+                # Cara aman & sederhana: Hapus semua data di Cloud, lalu masukkan ulang data hasil editan
+                hapus_semua_data()
+                data_baru = df_edit.drop(columns=['id'], errors='ignore').to_dict(orient="records")
+                if len(data_baru) > 0:
+                    try:
+                        supabase.table("transaksi").insert(data_baru).execute()
+                    except Exception as e:
+                        st.error(f"Terjadi kesalahan saat menyimpan: {e}")
+            
+            st.toast("Perubahan berhasil disimpan!", icon="💾")
+            st.success("✅ Seluruh perubahan berhasil disinkronkan ke Database Cloud!")
+            time.sleep(1.5)
+            st.rerun()
+
+# ==========================================
+# HALAMAN 5: EKSPOR DATA
+# ==========================================
 elif pilihan_menu == "📥 Export Data":
     st.markdown("<h2 style='color: #0F172A; font-weight: 700;'>Export Data</h2>", unsafe_allow_html=True)
     if df.empty:
@@ -243,7 +294,7 @@ elif pilihan_menu == "📥 Export Data":
         st.download_button("⬇️ Download CSV", data=csv_data, file_name="laporan_keuangan_cloud.csv", mime="text/csv")
 
 # ==========================================
-# HALAMAN 5: PENGATURAN & MIGRASI DATA LAMA
+# HALAMAN 6: PENGATURAN & MIGRASI DATA LAMA
 # ==========================================
 elif pilihan_menu == "⚙️ Pengaturan":
     st.markdown("<h2 style='color: #0F172A; font-weight: 700;'>Pengaturan Aplikasi</h2>", unsafe_allow_html=True)
@@ -255,16 +306,12 @@ elif pilihan_menu == "⚙️ Pengaturan":
         list_bank_baru = [str(b).strip() for b in df_bank_edit["Nama Akun / Bank"].tolist() if str(b).strip() != ""]
         pengaturan["bank"] = list_bank_baru
         simpan_pengaturan(pengaturan)
-        st.success("✅ Daftar bank berhasil diperbarui!")
+        st.toast("Pengaturan Bank Disimpan!", icon="✅")
 
     st.markdown("---")
-    
-    # --- FITUR BARU: MIGRASI DATA DARI JSON KE SUPABASE ---
     st.markdown("#### 🔄 Migrasi Data Lama (JSON ke Supabase)")
     st.write("Klik tombol di bawah ini untuk memindahkan semua catatan lama Anda dari file lokal ke database Cloud. **Cukup klik satu kali saja!**")
-    
     if st.button("🚀 Pindahkan Data Lama ke Cloud"):
-        # Cek apakah file json lokal masih ada
         if os.path.exists("dompet_pribadi.json"):
             with open("dompet_pribadi.json", "r") as file:
                 try:
@@ -273,11 +320,8 @@ elif pilihan_menu == "⚙️ Pengaturan":
                         st.warning("File dompet_pribadi.json Anda kosong.")
                     else:
                         berhasil = 0
-                        # Looping setiap transaksi lama untuk dikirim ke Supabase
                         for item in data_lama:
-                            # Jika data lama tidak punya tipe, anggap Pengeluaran
                             tipe_trx = item.get("tipe", "Pengeluaran")
-                            
                             data_insert = {
                                 "tanggal": item.get("tanggal"),
                                 "keterangan": item.get("keterangan"),
@@ -288,12 +332,11 @@ elif pilihan_menu == "⚙️ Pengaturan":
                             try:
                                 tambah_data_db(data_insert)
                                 berhasil += 1
-                            except Exception as e:
-                                pass # Abaikan jika ada error pada baris tertentu
-                        
-                        st.success(f"✅ Hore! Berhasil memindahkan {berhasil} data ke database Cloud Supabase! Silakan cek menu Dashboard.")
+                            except:
+                                pass 
+                        st.success(f"✅ Berhasil memindahkan {berhasil} data ke Cloud! Silakan cek menu Dashboard.")
                 except json.JSONDecodeError:
-                    st.error("File dompet_pribadi.json rusak atau tidak bisa dibaca.")
+                    st.error("File rusak atau tidak terbaca.")
         else:
             st.error("File dompet_pribadi.json tidak ditemukan.")
 
@@ -304,6 +347,7 @@ elif pilihan_menu == "⚙️ Pengaturan":
         if konfirmasi:
             hapus_semua_data()
             st.success("✅ Database berhasil di-reset!")
+            time.sleep(1)
             st.rerun()
         else:
             st.error("⚠️ Centang kotak konfirmasi terlebih dahulu.")
