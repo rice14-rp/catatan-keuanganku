@@ -1,26 +1,44 @@
 import streamlit as st
-import json
-import os
 import pandas as pd
 from datetime import datetime, timedelta
 import plotly.express as px
+from supabase import create_client, Client
 
-FILE_NAME = "dompet_pribadi.json"
-FILE_PENGATURAN = "pengaturan.json"
+# --- KONEKSI KE SUPABASE ---
+# Mengambil kunci rahasia dari brankas Streamlit Secrets
+try:
+    url: str = st.secrets["SUPABASE_URL"]
+    key: str = st.secrets["SUPABASE_KEY"]
+    supabase: Client = create_client(url, key)
+except Exception as e:
+    st.error("⚠️ Gagal terhubung ke Supabase! Pastikan Anda sudah mengatur SUPABASE_URL dan SUPABASE_KEY di Streamlit Secrets.")
+    st.stop()
 
-# --- FUNGSI MEMUAT & MENYIMPAN DATA ---
+# --- FUNGSI DATABASE SUPABASE ---
 def muat_data():
-    if not os.path.exists(FILE_NAME):
+    try:
+        response = supabase.table("transaksi").select("*").execute()
+        return response.data if response.data else []
+    except Exception as e:
+        st.error(f"Gagal memuat data: {e}")
         return []
-    with open(FILE_NAME, "r") as file:
-        try:
-            return json.load(file)
-        except json.JSONDecodeError:
-            return []
 
-def simpan_data(data):
-    with open(FILE_NAME, "w") as file:
-        json.dump(data, file, indent=4)
+def tambah_data_db(data_baru):
+    try:
+        supabase.table("transaksi").insert(data_baru).execute()
+    except Exception as e:
+        st.error(f"Gagal menyimpan data: {e}")
+
+def hapus_semua_data():
+    try:
+        # Menghapus seluruh baris data di tabel transaksi
+        supabase.table("transaksi").delete().neq("id", 0).execute()
+    except Exception as e:
+        st.error(f"Gagal menghapus data: {e}")
+
+# --- FUNGSI PENGATURAN (LOKAL JSON UNTUK BANK) ---
+import json, os
+FILE_PENGATURAN = "pengaturan.json"
 
 def muat_pengaturan():
     if not os.path.exists(FILE_PENGATURAN):
@@ -38,7 +56,7 @@ def simpan_pengaturan(data):
 # --- PENGATURAN HALAMAN WEB ---
 st.set_page_config(page_title="Finance Dashboard", page_icon="💳", layout="wide", initial_sidebar_state="expanded")
 
-# --- CSS SUPER KUSTOM UNTUK TAMPILAN SAAS ---
+# --- CSS SUPER KUSTOM TAMPILAN SAAS ---
 st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -87,6 +105,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# Muat data dari Supabase
 data_keuangan = muat_data()
 pengaturan = muat_pengaturan()
 daftar_bank = pengaturan["bank"]
@@ -103,15 +122,12 @@ with st.sidebar:
             "💰 Total Saldo (Dompet)", 
             "💸 Add Transaction", 
             "🔍 Filter & History", 
-            "✏️ Edit Records", 
             "📥 Export Data",
             "⚙️ Pengaturan"
         ]
     )
 
 df = pd.DataFrame(data_keuangan)
-if not df.empty and 'tipe' not in df.columns:
-    df['tipe'] = 'Pengeluaran'
 if not df.empty:
     df['tanggal_asli'] = pd.to_datetime(df['tanggal'])
     df = df.sort_values(by='tanggal_asli') 
@@ -121,10 +137,10 @@ if not df.empty:
 # ==========================================
 if pilihan_menu == "📊 Dashboard Overview":
     st.markdown("<h2 style='color: #0F172A; font-weight: 700; margin-bottom: 0px;'>Welcome back!</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='color: #64748B; margin-bottom: 30px;'>Here's your cash flow and financial summary.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color: #64748B; margin-bottom: 30px;'>Here's your cloud cash flow and financial summary.</p>", unsafe_allow_html=True)
 
     if df.empty:
-        st.info("Belum ada data transaksi yang tercatat.")
+        st.info("Belum ada data transaksi di database. Silakan tambah transaksi baru!")
     else:
         df_pemasukan = df[df['tipe'] == 'Pemasukan']
         df_pengeluaran = df[df['tipe'] == 'Pengeluaran']
@@ -147,7 +163,7 @@ if pilihan_menu == "📊 Dashboard Overview":
         with k3:
             st.markdown(f"""<div class="saas-card"><div class="card-header"><div class="card-title">Arus Kas (Net)</div></div><div class="card-value" style="color: {warna_arus_kas};">Rp {arus_kas_bulan_ini:,.0f}</div></div>""", unsafe_allow_html=True)
         with k4:
-            st.markdown(f"""<div class="saas-card"><div class="card-header"><div class="card-title">Total Saldo (Semua Akun)</div></div><div class="card-value" style="color: #3B82F6;">Rp {saldo_saat_ini:,.0f}</div></div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div class="saas-card"><div class="card-header"><div class="card-title">Total Saldo (Cloud)</div></div><div class="card-value" style="color: #3B82F6;">Rp {saldo_saat_ini:,.0f}</div></div>""", unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
@@ -226,20 +242,21 @@ elif pilihan_menu == "💸 Add Transaction":
         
         if st.form_submit_button("Simpan Transaksi"):
             if keterangan and jumlah > 0:
-                data_keuangan.append({
+                data_baru = {
                     "tanggal": datetime.now().strftime("%Y-%m-%d %H:%M"),
                     "keterangan": keterangan,
                     "jumlah": jumlah,
                     "tipe": tipe_transaksi,
                     "jenis_pembayaran": jenis_bayar
-                })
-                simpan_data(data_keuangan)
-                st.success(f"✅ {tipe_transaksi} berhasil disimpan!")
+                }
+                tambah_data_db(data_baru)
+                st.success(f"✅ {tipe_transaksi} berhasil disimpan ke Database Cloud!")
+                st.rerun()
             else:
                 st.error("⚠️ Isi keterangan dan pastikan jumlah lebih dari 0!")
 
 # ==========================================
-# HALAMAN 3-5: FILTER, EDIT, EKSPOR
+# HALAMAN 3: FILTER & RIWAYAT
 # ==========================================
 elif pilihan_menu == "🔍 Filter & History":
     st.markdown("<h2 style='color: #0F172A; font-weight: 700;'>Transaction History</h2>", unsafe_allow_html=True)
@@ -265,36 +282,19 @@ elif pilihan_menu == "🔍 Filter & History":
             df_tampil = df_tampil.sort_values(by='tanggal_asli', ascending=False)
             st.dataframe(df_tampil[['tanggal', 'keterangan', 'tipe', 'jenis_pembayaran', 'jumlah']], use_container_width=True, hide_index=True)
 
-elif pilihan_menu == "✏️ Edit Records":
-    st.markdown("<h2 style='color: #0F172A; font-weight: 700;'>Edit Records</h2>", unsafe_allow_html=True)
-    if df.empty:
-        st.warning("Belum ada data untuk diedit.")
-    else:
-        semua_opsi = list(set(df['jenis_pembayaran'].unique()).union(set(daftar_bank)))
-        df_edit = st.data_editor(
-            df.drop(columns=['tanggal_asli'], errors='ignore'), 
-            num_rows="dynamic", use_container_width=True,
-            column_config={
-                "tanggal": st.column_config.TextColumn("Waktu"),
-                "tipe": st.column_config.SelectboxColumn("Tipe", options=["Pemasukan", "Pengeluaran"]),
-                "jumlah": st.column_config.NumberColumn("Jumlah"),
-                "jenis_pembayaran": st.column_config.SelectboxColumn("Akun", options=semua_opsi)
-            }
-        )
-        if st.button("💾 Simpan Perubahan"):
-            simpan_data(df_edit.to_dict(orient="records"))
-            st.success("✅ Data diperbarui!")
-
+# ==========================================
+# HALAMAN 4: EKSPOR DATA
+# ==========================================
 elif pilihan_menu == "📥 Export Data":
     st.markdown("<h2 style='color: #0F172A; font-weight: 700;'>Export Data</h2>", unsafe_allow_html=True)
     if df.empty:
         st.warning("Tidak ada data.")
     else:
         csv_data = df.drop(columns=['tanggal_asli'], errors='ignore').to_csv(index=False, sep=";").encode('utf-8')
-        st.download_button("⬇️ Download CSV", data=csv_data, file_name="laporan.csv", mime="text/csv")
+        st.download_button("⬇️ Download CSV", data=csv_data, file_name="laporan_keuangan.csv", mime="text/csv")
 
 # ==========================================
-# HALAMAN 6: PENGATURAN (TERMASUK RESET DATA)
+# HALAMAN 5: PENGATURAN & RESET
 # ==========================================
 elif pilihan_menu == "⚙️ Pengaturan":
     st.markdown("<h2 style='color: #0F172A; font-weight: 700;'>Pengaturan Aplikasi</h2>", unsafe_allow_html=True)
@@ -310,16 +310,14 @@ elif pilihan_menu == "⚙️ Pengaturan":
         st.success("✅ Daftar bank berhasil diperbarui!")
 
     st.markdown("---")
+    st.markdown("#### ⚠️ Danger Zone (Reset Database Cloud)")
+    st.write("Fitur ini akan menghapus seluruh isi tabel transaksi di Supabase secara permanen.")
+    konfirmasi = st.checkbox("Saya yakin ingin mengosongkan seluruh database.")
     
-    # FITUR RESET DATA DARI NOL
-    st.markdown("#### ⚠️ Danger Zone (Reset Data)")
-    st.write("Fitur ini akan menghapus **seluruh** riwayat transaksi Anda secara permanen. Gunakan jika Anda sudah selesai melakukan uji coba dan siap mencatat data yang sebenarnya.")
-    
-    konfirmasi = st.checkbox("Saya yakin ingin menghapus seluruh data transaksi.")
-    
-    if st.button("🗑️ Hapus Semua Data Transaksi"):
+    if st.button("🗑️ Hapus Semua Data Cloud"):
         if konfirmasi:
-            simpan_data([]) # Mengosongkan isi dompet_pribadi.json
-            st.success("✅ Data berhasil di-reset! Silakan muat ulang (refresh) halaman atau pindah ke menu Dashboard.")
+            hapus_semua_data()
+            st.success("✅ Database berhasil di-reset bersih dari nol!")
+            st.rerun()
         else:
-            st.error("⚠️ Silakan centang kotak konfirmasi terlebih dahulu sebelum menghapus data.")
+            st.error("⚠️ Centang kotak konfirmasi terlebih dahulu.")
