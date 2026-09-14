@@ -1,0 +1,6 @@
+[theme]
+# Memaksa aplikasi selalu berada di mode terang
+base = "light"
+
+# Menyelaraskan warna utama dengan tema biru SaaS kita
+primaryColor = "#3B82F6"
